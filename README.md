@@ -55,6 +55,14 @@ docker run --gpus all -v  $(pwd):/root/faster_reference --shm-size 12G -ti --nam
 ```
 
 8-put the model to train
+
+
+Single gpu training:
+```
+python3  code/tasks/train.py --dataset coco --model fasterrcnn_resnet50_fpn --epochs 26 --batch-size 4 --lr 0.005
+```
+
+Multi gpu-trianing (I am not sure if it work):
 ```
 python3 -m torch.distributed.launch --nproc_per_node=8 --use_env code/tasks/train.py\
     --dataset coco --model fasterrcnn_resnet50_fpn --epochs 26\
