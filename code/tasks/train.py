@@ -24,22 +24,17 @@ import time
 
 import torch
 import torch.utils.data
-from torch import nn
 import torchvision
-import torchvision.models.detection
-import torchvision.models.detection.mask_rcnn
 
 from datasets.coco_utils import get_coco, get_coco_kp
 
 from util.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
 from util.engine import train_one_epoch, evaluate
 
+import util.presets as presets
 import util.utils as utils
-import util.transforms as T
 
-from pdb import set_trace as pause
-from model.mask_rcnn import maskrcnn_resnet50_fpn
-
+from model.faster_rcnn import fasterrcnn_resnet50_fpn
 
 def get_dataset(name, image_set, transform, data_path):
     paths = {
@@ -99,7 +94,7 @@ def main(args):
     if "rcnn" in args.model:
         if args.rpn_score_thresh is not None:
             kwargs["rpn_score_thresh"] = args.rpn_score_thresh
-    model = torchvision.models.detection.__dict__[args.model](num_classes=num_classes, pretrained=args.pretrained,
+    model = fasterrcnn_resnet50_fpn(num_classes=num_classes, pretrained=args.pretrained,
                                                               **kwargs)
     model.to(device)
 
@@ -155,7 +150,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__doc__)
 
-    parser.add_argument('--data-path', default='/datasets01/COCO/022719/', help='dataset')
+    parser.add_argument('--data-path', default='data/coco/', help='dataset')
     parser.add_argument('--dataset', default='coco', help='dataset')
     parser.add_argument('--model', default='maskrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')

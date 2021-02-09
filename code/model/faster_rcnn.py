@@ -20,7 +20,7 @@ from model.generalized_rcnn import GeneralizedRCNN
 from model.rpn import RPNHead, RegionProposalNetwork
 from model.roi_heads import RoIHeads
 from util.transform import GeneralizedRCNNTransform
-from util.backbone_utils import resnet_fpn_backbone, _validate_resnet_trainable_layers
+from util.backbone_utils import resnet_fpn_backbone, _validate_trainable_layers, mobilenet_backbone
 from pdb import set_trace as pause
 
 

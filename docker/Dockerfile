@@ -33,4 +33,4 @@ RUN echo "set -g mouse on" > ~/.tmux.conf
 # enable pdb autocomplete
 RUN  printf "import rlcompleter\nimport pdb\npdb.Pdb.complete = rlcompleter.Completer(locals()).complete" > ~/.pdbrc
 
-WORKDIR "/root/normal_mask/"
+WORKDIR "/root/faster_reference/"
