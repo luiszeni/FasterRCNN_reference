@@ -1,5 +1,6 @@
 
-1- clone the repo
+
+1- clone the repo 
 ```
 git clone https://github.com/luiszeni/FasterRCNN_reference.git && cd FasterRCNN_reference
 ```
@@ -7,69 +8,69 @@ git clone https://github.com/luiszeni/FasterRCNN_reference.git && cd FasterRCNN_
 2-create the dir to extract the dataset
 ```
 mkdir data
-mkdir data/coco
-cd data/coco 
+cd data 
 ```
 
-3-download the coco data from the site
-```
-wget http://images.cocodataset.org/zips/train2017.zip
-wget http://images.cocodataset.org/zips/val2017.zip
-wget http://images.cocodataset.org/annotations/annotations_trainval2017.zip
-```
+3- Download the training, validation, test data, and VOCdevkit
+    ```Shell
+    wget http://host.robots.ox.ac.uk/pascal/VOC/voc2007/VOCtrainval_06-Nov-2007.tar
+    wget http://host.robots.ox.ac.uk/pascal/VOC/voc2007/VOCtest_06-Nov-2007.tar
+    ```
+    Optional, normally faster to download, links to VOC (from darknet):
+    ```Shell
+    wget https://pjreddie.com/media/files/VOCtrainval_06-Nov-2007.tar
+    wget https://pjreddie.com/media/files/VOCtest_06-Nov-2007.tar
+    ```
+4- Extract all of these tars into one directory named `VOCdevkit`
+    ```Shell
+    tar xvf VOCtrainval_06-Nov-2007.tar
+    tar xvf VOCtest_06-Nov-2007.tar
+    ```
+5- Download pascal annotations in the COCO format
+    ```Shell
+    wget http://inf.ufrgs.br/~lfazeni/CVPR_deepvision2020/coco_annotations_VOC.tar
+    ```
+6- Extract the annotations
+    ```Shell
+    tar xvf coco_annotations_VOC.tar
+    ```
 
-4-extract coco data
-```
-unzip train2017.zip
-unzip val2017.zip
-unzip annotations_trainval2017.zip
-```
+It should have this basic structure
+    ```Shell
+    $VOC2007/                           
+    $VOC2007/annotations
+    $VOC2007/JPEGImages
+    $VOC2007/VOCdevkit        
+    # ... and several other directories ...
+    ```
 
-
-It will have the following structure
-  ```
-  coco
-  ├── annotations
-  │   ├── instances_train2017.json
-  │   ├── instances_val2017.json
-  ├── train2017
-  ├── val2017
-  ```
-
-5-return to root directory
+7-return to root directory
 ```
 cd ../..
 ```
 
 
-6-build the docker machine
+8-build the docker machine
 ```
 cd docker
 docker build . -t faster
 cd ..
 ```
 
-7-create a container
+9-create a container
 ```
 docker run --gpus all -v  $(pwd):/root/faster_reference --shm-size 12G -ti --name faster faster
 ```
 
-8-put the model to train
+10-put the model to train
 
 
 Single gpu training:
 ```
-python3  code/tasks/train.py --dataset coco --model fasterrcnn_resnet50_fpn --epochs 26 --batch-size 4 --lr 0.005
+python3  code/tasks/train.py --dataset voc --data-path data/VOCdevkit/VOC2007/ --model fasterrcnn_resnet50_fpn --epochs 64 --batch-size 6
 ```
 
-Multi gpu-trianing (I am not sure if it work):
+11-Evaluate on test set:
 ```
-python3 -m torch.distributed.launch --nproc_per_node=8 --use_env code/tasks/train.py\
-    --dataset coco --model fasterrcnn_resnet50_fpn --epochs 26\
-    --lr-steps 16 22 --aspect-ratio-group-factor 3
-```
-
-9-Evaluate on val set:
-```
-TODO
+python3  code/tasks/train.py --dataset voc --data-path data/VOCdevkit/VOC2007/ --model fasterrcnn_resnet50_fpn --test_only --resume <location of the weights>
 ```

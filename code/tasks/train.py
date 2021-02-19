@@ -27,17 +27,19 @@ import torch.utils.data
 import torchvision
 
 from datasets.coco_utils import get_coco, get_coco_kp
+from datasets.voc_utils  import get_voc
 
 from util.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
 from util.engine import train_one_epoch, evaluate
 
 import util.presets as presets
 import util.utils as utils
-
+import numpy as np
 from model.faster_rcnn import fasterrcnn_resnet50_fpn
 
 def get_dataset(name, image_set, transform, data_path):
     paths = {
+        "voc": (data_path, get_voc, 21),
         "coco": (data_path, get_coco, 91),
         "coco_kp": (data_path, get_coco_kp, 2)
     }
@@ -56,6 +58,15 @@ def main(args):
     print(args)
 
     device = torch.device(args.device)
+
+    RNG_SEED = 42
+    print("using seed cfg.RNG_SEED", RNG_SEED)
+    np.random.seed(RNG_SEED)
+    torch.manual_seed(RNG_SEED)
+    torch.cuda.manual_seed(RNG_SEED)
+    torch.backends.cudnn.deterministic = True
+
+
 
     # Data loading code
     print("Loading data")
@@ -137,8 +148,9 @@ def main(args):
                 'epoch': epoch},
                 os.path.join(args.output_dir, 'model_{}.pth'.format(epoch)))
 
-        # evaluate after every epoch
-        evaluate(model, data_loader_test, device=device)
+        # evaluate after every 10 epochs
+        if epoch % 10 == 0:
+            evaluate(model, data_loader_test, device=device)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))

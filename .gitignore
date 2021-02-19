@@ -18,3 +18,4 @@ Thumbs.db
 *.cu.o
 *.npy
 *.zip
+*.pth
