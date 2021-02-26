@@ -74,3 +74,8 @@ python3  code/tasks/train.py --dataset voc --data-path data/VOCdevkit/VOC2007/ -
 ```
 python3  code/tasks/train.py --dataset voc --data-path data/VOCdevkit/VOC2007/ --model fasterrcnn_resnet50_fpn --test_only --resume <location of the weights>
 ```
+
+
+
+## giou was trained using:
+python3  code/tasks/train.py --dataset voc --data-path data/VOCdevkit/VOC2007/ --model fasterrcnn_resnet50_fpn --epochs 64 --batch-size 6 --loss-bbox-type giou --loss-rpn-type giou --loss-bbox-weight 10

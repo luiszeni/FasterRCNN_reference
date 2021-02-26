@@ -149,7 +149,7 @@ class RegionProposalNetwork(torch.nn.Module):
                  fg_iou_thresh, bg_iou_thresh,
                  batch_size_per_image, positive_fraction,
                  #
-                 pre_nms_top_n, post_nms_top_n, nms_thresh, score_thresh=0.0):
+                 pre_nms_top_n, post_nms_top_n, nms_thresh, score_thresh=0.0, loss_rpn_type='l1-smooth', loss_rpn_weight=1):
         super(RegionProposalNetwork, self).__init__()
         self.anchor_generator = anchor_generator
         self.head = head
@@ -173,6 +173,9 @@ class RegionProposalNetwork(torch.nn.Module):
         self.nms_thresh = nms_thresh
         self.score_thresh = score_thresh
         self.min_size = 1e-3
+
+        self.loss_rpn_type    = loss_rpn_type
+        self.loss_rpn_weight  = loss_rpn_weight
 
     def pre_nms_top_n(self):
         if self.training:
@@ -287,7 +290,7 @@ class RegionProposalNetwork(torch.nn.Module):
             final_scores.append(scores)
         return final_boxes, final_scores
 
-    def compute_loss(self, objectness, pred_bbox_deltas, labels, regression_targets):
+    def compute_loss(self, objectness, pred_bbox_deltas, labels, regression_targets, anchors, original_image_sizes):
         # type: (Tensor, Tensor, List[Tensor], List[Tensor]) -> Tuple[Tensor, Tensor]
         """
         Args:
@@ -300,6 +303,9 @@ class RegionProposalNetwork(torch.nn.Module):
             objectness_loss (Tensor)
             box_loss (Tensor)
         """
+        
+        loss_rpn_type   = self.loss_rpn_type
+
 
         sampled_pos_inds, sampled_neg_inds = self.fg_bg_sampler(labels)
         sampled_pos_inds = torch.where(torch.cat(sampled_pos_inds, dim=0))[0]
@@ -312,12 +318,63 @@ class RegionProposalNetwork(torch.nn.Module):
         labels = torch.cat(labels, dim=0)
         regression_targets = torch.cat(regression_targets, dim=0)
 
-        box_loss = det_utils.smooth_l1_loss(
-            pred_bbox_deltas[sampled_pos_inds],
-            regression_targets[sampled_pos_inds],
-            beta=1 / 9,
-            size_average=False,
-        ) / (sampled_inds.numel())
+        if loss_rpn_type == 'l1-smooth':
+            box_loss = det_utils.smooth_l1_loss(
+                pred_bbox_deltas[sampled_pos_inds],
+                regression_targets[sampled_pos_inds],
+                beta=1 / 9,
+                size_average=False,
+            )
+        
+        elif loss_rpn_type == 'iou':
+            regression_targets = self.box_coder.decode(regression_targets, anchors)   #.clamp(min=0)
+            pred_bbox_deltas   = self.box_coder.decode(pred_bbox_deltas, anchors)     #.clamp(min=0)
+
+            box_loss, _ = det_utils.giou_loss(
+                pred_bbox_deltas[sampled_pos_inds],
+                regression_targets[sampled_pos_inds],
+                beta=1 / 9,
+                size_average=False,
+            )
+        elif loss_rpn_type == 'giou':
+
+
+            boxes_per_image = [boxes_in_image.shape[0] for boxes_in_image in anchors]
+
+            regression_targets = self.box_coder.decode(regression_targets, anchors)   #.clamp(min=0)
+            pred_bbox_deltas   = self.box_coder.decode(pred_bbox_deltas,   anchors)     #.clamp(min=0)
+
+            regression_targets = regression_targets.split(boxes_per_image, 0)
+            pred_bbox_deltas   = pred_bbox_deltas.split(boxes_per_image, 0)
+
+
+            all_regression_targets = []
+            all_pred_bbox_deltas = []
+
+            for regression_target, pred_bbox_delta, image_shape in zip(regression_targets, pred_bbox_deltas, original_image_sizes):
+                regression_target = box_ops.clip_boxes_to_image(regression_target, image_shape)
+                pred_bbox_delta = box_ops.clip_boxes_to_image(pred_bbox_delta, image_shape)
+
+
+                all_regression_targets.append(regression_target)
+                all_pred_bbox_deltas.append(pred_bbox_delta)
+
+
+            regression_targets = torch.cat(all_regression_targets)
+            pred_bbox_deltas = torch.cat(all_pred_bbox_deltas)
+
+            _, box_loss = det_utils.giou_loss(
+                pred_bbox_deltas[sampled_pos_inds],
+                regression_targets[sampled_pos_inds],
+                beta=1 / 9,
+                size_average=False,
+            ) 
+        elif loss_rpn_type == 'piou':
+            raise ValueError("PIOU should be implemented yet")
+        else:
+            raise ValueError(loss_rpn_type, "is not a valid bbox regression loss function")
+
+        box_loss = box_loss / sampled_inds.numel()
 
         objectness_loss = F.binary_cross_entropy_with_logits(
             objectness[sampled_inds], labels[sampled_inds]
@@ -328,6 +385,7 @@ class RegionProposalNetwork(torch.nn.Module):
     def forward(self,
                 images,       # type: ImageList
                 features,     # type: Dict[str, Tensor]
+                original_image_sizes,
                 targets=None  # type: Optional[List[Dict[str, Tensor]]]
                 ):
         # type: (...) -> Tuple[List[Tensor], Dict[str, Tensor]]
@@ -370,9 +428,10 @@ class RegionProposalNetwork(torch.nn.Module):
             labels, matched_gt_boxes = self.assign_targets_to_anchors(anchors, targets)
             regression_targets = self.box_coder.encode(matched_gt_boxes, anchors)
             loss_objectness, loss_rpn_box_reg = self.compute_loss(
-                objectness, pred_bbox_deltas, labels, regression_targets)
+                objectness, pred_bbox_deltas, labels, regression_targets, anchors, original_image_sizes)
+            
             losses = {
                 "loss_objectness": loss_objectness,
-                "loss_rpn_box_reg": loss_rpn_box_reg,
+                "loss_rpn_box_reg": loss_rpn_box_reg * self.loss_rpn_weight,
             }
         return boxes, losses

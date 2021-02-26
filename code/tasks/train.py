@@ -36,6 +36,7 @@ import util.presets as presets
 import util.utils as utils
 import numpy as np
 from model.faster_rcnn import fasterrcnn_resnet50_fpn
+from pdb import set_trace as pause
 
 def get_dataset(name, image_set, transform, data_path):
     paths = {
@@ -100,8 +101,13 @@ def main(args):
 
     print("Creating model")
     kwargs = {
-        "trainable_backbone_layers": args.trainable_backbone_layers
+        "trainable_backbone_layers": args.trainable_backbone_layers,
+        "loss_bbox_type": args.loss_bbox_type,
+        "loss_bbox_weight": args.loss_bbox_weight,
+        "loss_rpn_type": args.loss_rpn_type,
+        "loss_rpn_weight": args.loss_rpn_weight
     }
+
     if "rcnn" in args.model:
         if args.rpn_score_thresh is not None:
             kwargs["rpn_score_thresh"] = args.rpn_score_thresh
@@ -109,6 +115,7 @@ def main(args):
                                                               **kwargs)
     model.to(device)
 
+    
     model_without_ddp = model
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
@@ -161,6 +168,11 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(
         description=__doc__)
+
+    parser.add_argument('--loss-bbox-type', default='l1-smooth', help='The type of bounding box regression loss to train on. Valid losses: l1-smooth(default), iou, giou, piou')
+    parser.add_argument('--loss-rpn-type', default='l1-smooth', help='The type of rpn regression loss to train on. Valid losses: l1-smooth(default), iou, giou, piou')
+    parser.add_argument('--loss-bbox-weight', default=1, type=int, help='The weight of the final bounding box refinement loss')
+    parser.add_argument('--loss-rpn-weight', default=1, type=int, help='The weight of the final bounding box refinement loss')
 
     parser.add_argument('--data-path', default='data/coco/', help='dataset')
     parser.add_argument('--dataset', default='coco', help='dataset')

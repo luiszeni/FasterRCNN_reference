@@ -19,7 +19,7 @@ from torch.jit.annotations import Optional, List, Dict, Tuple
 from pdb import set_trace as pause
 
 
-def fastrcnn_loss(class_logits, box_regression, labels, regression_targets):
+def fastrcnn_loss(class_logits, box_regression, labels, regression_targets, loss_bbox_type, loss_bbox_weight, anchors, box_coder, original_image_sizes):
     # type: (Tensor, Tensor, List[Tensor], List[Tensor]) -> Tuple[Tensor, Tensor]
     """
     Computes the loss for Faster R-CNN.
@@ -34,7 +34,6 @@ def fastrcnn_loss(class_logits, box_regression, labels, regression_targets):
         classification_loss (Tensor)
         box_loss (Tensor)
     """
-
     labels = torch.cat(labels, dim=0)
     regression_targets = torch.cat(regression_targets, dim=0)
 
@@ -48,13 +47,65 @@ def fastrcnn_loss(class_logits, box_regression, labels, regression_targets):
     N, num_classes = class_logits.shape
     box_regression = box_regression.reshape(N, box_regression.size(-1) // 4, 4)
 
-    box_loss = det_utils.smooth_l1_loss(
-        box_regression[sampled_pos_inds_subset, labels_pos],
-        regression_targets[sampled_pos_inds_subset],
-        beta=1 / 9,
-        size_average=False,
-    )
+    if loss_bbox_type == 'l1-smooth':
+        box_loss = det_utils.smooth_l1_loss(
+            box_regression[sampled_pos_inds_subset, labels_pos],
+            regression_targets[sampled_pos_inds_subset],
+            beta=1 / 9,
+            size_average=False,
+        )
+    elif loss_bbox_type == 'iou':
+        box_loss, _ = det_utils.giou_loss(
+            box_regression[sampled_pos_inds_subset, labels_pos],
+            regression_targets[sampled_pos_inds_subset],
+            beta=1 / 9,
+            size_average=False,
+        )
+    elif loss_bbox_type == 'giou':
+
+
+        boxes_per_image = [boxes_in_image.shape[0] for boxes_in_image in anchors]
+
+        regression_targets = box_coder.decode(regression_targets, anchors)                                                       #.clamp(min=0)
+        box_regression     = box_coder.decode(box_regression[torch.arange(box_regression.shape[0]), labels], anchors)      #.clamp(min=0)
+
+
+        regression_targets = regression_targets.split(boxes_per_image, 0)
+        box_regression   = box_regression.split(boxes_per_image, 0)
+
+
+        all_regression_targets = []
+        all_box_regression = []
+
+        for regression_target, box_regress, image_shape in zip(regression_targets, box_regression, original_image_sizes):
+            regression_target = box_ops.clip_boxes_to_image(regression_target, image_shape)
+            box_regress = box_ops.clip_boxes_to_image(box_regress, image_shape)
+
+
+            all_regression_targets.append(regression_target)
+            all_box_regression.append(box_regress)
+
+
+        regression_targets = torch.cat(all_regression_targets)
+        box_regression = torch.cat(all_box_regression).squeeze()
+
+
+
+        _, box_loss = det_utils.giou_loss(
+            box_regression[sampled_pos_inds_subset],
+            regression_targets[sampled_pos_inds_subset],
+            beta=1 / 9,
+            size_average=False,
+        )
+    elif loss_bbox_type == 'piou':
+        raise ValueError("PIOU should be implemented yet")
+    else:
+        raise ValueError(loss_bbox_type, "is not a valid bbox regression loss function")
+    
     box_loss = box_loss / labels.numel()
+    
+    if loss_bbox_type == 'iou':
+        box_loss = box_loss * loss_bbox_weight
 
     return classification_loss, box_loss
 
@@ -514,6 +565,8 @@ class RoIHeads(nn.Module):
                  keypoint_roi_pool=None,
                  keypoint_head=None,
                  keypoint_predictor=None,
+                 loss_bbox_type='l1-smooth', 
+                 loss_bbox_weight=1
                  ):
         super(RoIHeads, self).__init__()
 
@@ -547,6 +600,9 @@ class RoIHeads(nn.Module):
         self.keypoint_roi_pool = keypoint_roi_pool
         self.keypoint_head = keypoint_head
         self.keypoint_predictor = keypoint_predictor
+
+        self.loss_bbox_type   = loss_bbox_type
+        self.loss_bbox_weight = loss_bbox_weight
 
     def has_mask(self):
         if self.mask_roi_pool is None:
@@ -758,16 +814,17 @@ class RoIHeads(nn.Module):
         box_features = self.box_roi_pool(features, proposals, image_shapes)
         box_features = self.box_head(box_features)
         class_logits, box_regression = self.box_predictor(box_features)
-
+        
         result: List[Dict[str, torch.Tensor]] = []
         losses = {}
         if self.training:
             assert labels is not None and regression_targets is not None
             loss_classifier, loss_box_reg = fastrcnn_loss(
-                class_logits, box_regression, labels, regression_targets)
+                class_logits, box_regression, labels, regression_targets, self.loss_bbox_type, self.loss_bbox_weight, proposals, self.box_coder, image_shapes)
+
             losses = {
                 "loss_classifier": loss_classifier,
-                "loss_box_reg": loss_box_reg
+                "loss_box_reg": loss_box_reg * self.loss_bbox_weight
             }
         else:
             boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes)

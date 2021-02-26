@@ -9,7 +9,7 @@ from collections import OrderedDict
 
 from torch import nn
 from typing import Dict
-
+from pdb import set_trace as pause
 
 class IntermediateLayerGetter(nn.ModuleDict):
     """
@@ -411,7 +411,6 @@ def smooth_l1_loss(input, target, beta: float = 1. / 9, size_average: bool = Tru
         return loss.mean()
     return loss.sum()
 
-
 def overwrite_eps(model, eps):
     """
     This method overwrites the default eps values of all the
@@ -428,3 +427,69 @@ def overwrite_eps(model, eps):
     for module in model.modules():
         if isinstance(module, FrozenBatchNorm2d):
             module.eps = eps
+
+
+
+def bbox_transform(deltas, weights, bbox_xform_clip=math.log(1000. / 16)):
+     wx, wy, ww, wh = weights
+     dx = deltas[:, 0::4] / wx
+     dy = deltas[:, 1::4] / wy
+     dw = deltas[:, 2::4] / ww
+     dh = deltas[:, 3::4] / wh
+
+     dw = torch.clamp(dw, max=bbox_xform_clip)
+     dh = torch.clamp(dh, max=bbox_xform_clip)
+
+     pred_ctr_x = dx
+     pred_ctr_y = dy
+     pred_w = torch.exp(dw)
+     pred_h = torch.exp(dh)
+
+     x1 = pred_ctr_x - 0.5 * pred_w
+     y1 = pred_ctr_y - 0.5 * pred_h
+     x2 = pred_ctr_x + 0.5 * pred_w
+     y2 = pred_ctr_y + 0.5 * pred_h
+
+     return x1.view(-1), y1.view(-1), x2.view(-1), y2.view(-1)
+
+
+
+def giou_loss(input, target, beta: float = 1. / 9, size_average: bool = True):
+    """
+
+    """
+    
+    input = input.squeeze()
+    target = target.squeeze()
+    x1, y1, x2, y2     = input[:,0],  input[:,1],  input[:,2],  input[:,3]  #bbox_transform(input, (1., 1., 1., 1.))
+    x1g, y1g, x2g, y2g = target[:,0], target[:,1], target[:,2], target[:,3] #bbox_transform(target, (1., 1., 1., 1.))
+
+    x2 = torch.max(x1, x2)
+    y2 = torch.max(y1, y2)
+
+    xkis1 = torch.max(x1, x1g)
+    ykis1 = torch.max(y1, y1g)
+    xkis2 = torch.min(x2, x2g)
+    ykis2 = torch.min(y2, y2g)
+
+    xc1 = torch.min(x1, x1g)
+    yc1 = torch.min(y1, y1g)
+    xc2 = torch.max(x2, x2g)
+    yc2 = torch.max(y2, y2g)
+
+    intsctk = torch.zeros(x1.size()).to(input)
+    mask = (ykis2 > ykis1) * (xkis2 > xkis1)
+    intsctk[mask] = (xkis2[mask] - xkis1[mask]) * (ykis2[mask] - ykis1[mask])
+    unionk = (x2 - x1) * (y2 - y1) + (x2g - x1g) * (y2g - y1g) - intsctk + 1e-7
+    iouk = intsctk / unionk
+
+    area_c = (xc2 - xc1) * (yc2 - yc1) + 1e-7
+    miouk = iouk - ((area_c - unionk) / area_c)
+    # iou_weights = bbox_inside_weights.view(-1, 4).mean(1) * bbox_outside_weights.view(-1, 4).mean(1)
+    iouk  = (1 - iouk)    #* iou_weights).sum(0) / input.size(0)
+    miouk = (1 - miouk)   #* iou_weights).sum(0) / input.size(0)
+
+    if size_average:
+        return iouk.mean(), miouk.mean()
+
+    return iouk.sum(), miouk.sum()

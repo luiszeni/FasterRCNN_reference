@@ -169,7 +169,7 @@ class FasterRCNN(GeneralizedRCNN):
                  box_score_thresh=0.05, box_nms_thresh=0.5, box_detections_per_img=100,
                  box_fg_iou_thresh=0.5, box_bg_iou_thresh=0.5,
                  box_batch_size_per_image=512, box_positive_fraction=0.25,
-                 bbox_reg_weights=None):
+                 bbox_reg_weights=None, loss_bbox_type='l1-smooth', loss_bbox_weight=1, loss_rpn_type='l1-smooth', loss_rpn_weight=1):
 
         if not hasattr(backbone, "out_channels"):
             raise ValueError(
@@ -201,7 +201,7 @@ class FasterRCNN(GeneralizedRCNN):
                 out_channels, rpn_anchor_generator.num_anchors_per_location()[0]
             )
 
-        rpn_pre_nms_top_n = dict(training=rpn_pre_nms_top_n_train, testing=rpn_pre_nms_top_n_test)
+        rpn_pre_nms_top_n  = dict(training=rpn_pre_nms_top_n_train, testing=rpn_pre_nms_top_n_test)
         rpn_post_nms_top_n = dict(training=rpn_post_nms_top_n_train, testing=rpn_post_nms_top_n_test)
 
         rpn = RegionProposalNetwork(
@@ -209,7 +209,9 @@ class FasterRCNN(GeneralizedRCNN):
             rpn_fg_iou_thresh, rpn_bg_iou_thresh,
             rpn_batch_size_per_image, rpn_positive_fraction,
             rpn_pre_nms_top_n, rpn_post_nms_top_n, rpn_nms_thresh,
-            score_thresh=rpn_score_thresh)
+            score_thresh=rpn_score_thresh, 
+            loss_rpn_type=loss_rpn_type, 
+            loss_rpn_weight=loss_rpn_weight)
 
         if box_roi_pool is None:
             box_roi_pool = MultiScaleRoIAlign(
@@ -236,7 +238,9 @@ class FasterRCNN(GeneralizedRCNN):
             box_fg_iou_thresh, box_bg_iou_thresh,
             box_batch_size_per_image, box_positive_fraction,
             bbox_reg_weights,
-            box_score_thresh, box_nms_thresh, box_detections_per_img)
+            box_score_thresh, box_nms_thresh, box_detections_per_img,
+            loss_bbox_type=loss_bbox_type, 
+            loss_bbox_weight=loss_bbox_weight)
 
         if image_mean is None:
             image_mean = [0.485, 0.456, 0.406]
