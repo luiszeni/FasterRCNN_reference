@@ -98,7 +98,38 @@ def fastrcnn_loss(class_logits, box_regression, labels, regression_targets, loss
             size_average=False,
         )
     elif loss_bbox_type == 'piou':
-        raise ValueError("PIOU should be implemented yet")
+        boxes_per_image = [boxes_in_image.shape[0] for boxes_in_image in anchors]
+
+        regression_targets = box_coder.decode(regression_targets, anchors)                                                       #.clamp(min=0)
+        box_regression     = box_coder.decode(box_regression[torch.arange(box_regression.shape[0]), labels], anchors)      #.clamp(min=0)
+
+
+        # regression_targets = regression_targets.split(boxes_per_image, 0)
+        # box_regression   = box_regression.split(boxes_per_image, 0)
+
+
+        # all_regression_targets = []
+        # all_box_regression = []
+
+        # for regression_target, box_regress, image_shape in zip(regression_targets, box_regression, original_image_sizes):
+        #     regression_target = box_ops.clip_boxes_to_image(regression_target, image_shape)
+        #     box_regress = box_ops.clip_boxes_to_image(box_regress, image_shape)
+
+
+        #     all_regression_targets.append(regression_target)
+        #     all_box_regression.append(box_regress)
+
+
+        # regression_targets = torch.cat(all_regression_targets)
+        # box_regression = torch.cat(all_box_regression).squeeze()
+
+
+
+        box_loss = det_utils.piou_loss(
+            box_regression[sampled_pos_inds_subset],
+            regression_targets[sampled_pos_inds_subset],
+            helinger=True
+        )
     else:
         raise ValueError(loss_bbox_type, "is not a valid bbox regression loss function")
     

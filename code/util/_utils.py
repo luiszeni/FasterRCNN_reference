@@ -493,3 +493,55 @@ def giou_loss(input, target, beta: float = 1. / 9, size_average: bool = True):
         return iouk.mean(), miouk.mean()
 
     return iouk.sum(), miouk.sum()
+
+def tlbr2gaussian(tlbr, scale = 0.25):
+    #
+    # Converts tl-br representation to Gaussian 
+    #
+
+    # center
+    x = (tlbr[:, 0] + tlbr[:, 2]) / 2
+    y = (tlbr[:, 1] + tlbr[:, 3]) / 2
+    
+    # width & height
+    w = tlbr[:, 2] - tlbr[:, 0]
+    h = tlbr[:, 3] - tlbr[:, 1]
+    
+    # Gaussian stds
+    # a = w*scale
+    # b = h*scale
+
+     # Gaussian stds
+    a = (w*scale)**2
+    b = (h*scale)**2
+    
+    return torch.stack((x,y,a,b),dim=1)
+
+
+def piou_loss(input, target, helinger = False):
+    """
+
+    """
+    input  = tlbr2gaussian(input.squeeze())
+    target = tlbr2gaussian(target.squeeze())
+
+    b1_x1, b1_y1, b1_a1, b1_b1 = input[:,0],  input[:,1],  input[:,2],  input[:,3]
+    b2_x2, b2_y2, b2_a2, b2_b2 = target[:,0], target[:,1], target[:,2], target[:,3]
+
+
+
+    t1 = ( (b1_x1 - b2_x2)**2/(b1_a1 + b2_a2) + (b1_y1 - b2_y2)**2 / (b1_b1 + b2_b2))/4.0
+    
+    t2 = torch.log((b1_a1+b2_a2)*(b1_b1+b2_b2))/2.0
+    t3 = torch.log(b1_a1*b1_b1*b2_a2*b2_b2)/4.0
+    t4 = torch.log( torch.ones(t3.shape, device=t3.device)*2)
+    
+    db = t1 + t2 - t3 - t4
+   
+    if helinger:
+        #
+        # Gets Helinger distance
+        #
+        db = torch.sqrt(1 - torch.exp(-db))
+    
+    return db.sum() 
