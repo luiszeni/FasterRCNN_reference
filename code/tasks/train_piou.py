@@ -73,7 +73,7 @@ def main(args):
     print("Loading data")
 
     dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
-    dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
+    dataset_test, _      = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
 
     print("Creating data loaders")
     if args.distributed:
@@ -126,7 +126,7 @@ def main(args):
         params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
     # lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_step_size, gamma=args.lr_gamma)
-    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.lr_steps, gamma=args.lr_gamma)
+    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30,40], gamma=args.lr_gamma)
 
     if args.resume:
         checkpoint = torch.load(args.resume, map_location='cpu')
@@ -143,23 +143,53 @@ def main(args):
     
     
     ##########
-    ### Warm up the heads
+    ### Warm up the heads with L3
+    best_ap = -1
+    model.rpn.loss_rpn_type   = 'piou_l3'
+    model.rpn.loss_rpn_weight = 1
+
+    model.roi_heads.loss_bbox_type = 'piou_l3'
+    model.roi_heads.loss_bbox_weight = 10
 
     # freeze the backbone
     print("Warming up the heads")
     for param in model.backbone.parameters():
         param.requires_grad = False
 
-    for epoch in range(2):
+    for epoch in range(50):
         if args.distributed:
             train_sampler.set_epoch(epoch)
        
         train_one_epoch(model, optimizer, data_loader, device, epoch, args.print_freq)
         lr_scheduler.step()
 
+        coco_evaluator, ap_default = evaluate(model, data_loader_test, device=device)
+
+        if ap_default > best_ap:
+            print("new best_ap found.  was",best_ap, " now is", ap_default)
+            best_ap = ap_default
+
+            utils.save_on_master({
+                'model': model_without_ddp.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'lr_scheduler': lr_scheduler.state_dict(),
+                'args': args,
+                'epoch': epoch},
+                os.path.join(args.output_dir, 'best_warm_up.pth'.format()))
+
+
     ##########
     ### Real training starts here:
-    print("Starting training unfreezing the backbone")
+    print("Starting training unfreezing the backbone and starting from best_warm_up.pth")
+
+    checkpoint = torch.load('best_warm_up.pth', map_location='cpu')
+    model.load_state_dict(checkpoint['model'])
+
+    model.rpn.loss_rpn_type   = 'piou_l1'
+    model.rpn.loss_rpn_weight = 1
+
+    model.roi_heads.loss_bbox_type = 'piou_l1'
+    model.roi_heads.loss_bbox_weight = 2
 
     # Unfreeze the backbone
     for param in model.backbone.parameters():
@@ -169,26 +199,30 @@ def main(args):
     optimizer = torch.optim.SGD(
         params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
    
-    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.lr_steps, gamma=args.lr_gamma)
-   
-    for epoch in range(args.start_epoch, args.epochs):
+    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[45,75], gamma=args.lr_gamma)
+    
+    best_ap = -1
+    for epoch in range(100):
         if args.distributed:
             train_sampler.set_epoch(epoch)
        
         train_one_epoch(model, optimizer, data_loader, device, epoch, args.print_freq)
         lr_scheduler.step()
-        if args.output_dir:
+        
+        coco_evaluator, ap_default = evaluate(model, data_loader_test, device=device)
+
+        if ap_default > best_ap:
+            print("new best_ap found.  was",best_ap, " now is", ap_default)
+            best_ap = ap_default
+
             utils.save_on_master({
                 'model': model_without_ddp.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'lr_scheduler': lr_scheduler.state_dict(),
                 'args': args,
                 'epoch': epoch},
-                os.path.join(args.output_dir, 'model_{}.pth'.format(epoch)))
+                os.path.join(args.output_dir, 'best_final.pth'.format()))
 
-        # evaluate after every 10 epochs
-        if epoch % 10 == 0:
-            evaluate(model, data_loader_test, device=device)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -224,7 +258,7 @@ if __name__ == "__main__":
                         metavar='W', help='weight decay (default: 1e-4)',
                         dest='weight_decay')
     parser.add_argument('--lr-step-size', default=8, type=int, help='decrease lr every step-size epochs')
-    parser.add_argument('--lr-steps', default=[16, 22], nargs='+', type=int, help='decrease lr every step-size epochs')
+    parser.add_argument('--lr-steps', default=[40, 70], nargs='+', type=int, help='decrease lr every step-size epochs')
     parser.add_argument('--lr-gamma', default=0.1, type=float, help='decrease lr by a factor of lr-gamma')
     parser.add_argument('--print-freq', default=20, type=int, help='print frequency')
     parser.add_argument('--output-dir', default='.', help='path where to save')
@@ -257,4 +291,4 @@ if __name__ == "__main__":
     if args.output_dir:
         utils.mkdir(args.output_dir)
 
-    main(args)
+    main(args) 

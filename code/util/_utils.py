@@ -494,6 +494,21 @@ def giou_loss(input, target, beta: float = 1. / 9, size_average: bool = True):
 
     return iouk.sum(), miouk.sum()
 
+
+def get_piou_values(array):
+    # xmin, ymin, xmax, ymax
+    xmin = array[:,0]; ymin = array[:,1]
+    xmax = array[:,2]; ymax = array[:,3]
+    
+    # get ProbIoU values
+    x = (xmin + xmax)/2.
+    y = (ymin + ymax)/2.
+    a = torch.pow((xmax - xmin), 2.)/12.
+    b = torch.pow((ymax - ymin), 2.)/12.
+    return torch.stack((x,y,a,b),dim=1)
+
+
+
 def tlbr2gaussian(tlbr, scale = 0.25):
     #
     # Converts tl-br representation to Gaussian 
@@ -518,12 +533,43 @@ def tlbr2gaussian(tlbr, scale = 0.25):
     return torch.stack((x,y,a,b),dim=1)
 
 
-def piou_loss(input, target, helinger = False):
+EPS = 1e-3
+def helinger_dist(input, target, freezed):
+    '''
+    Dh = sqrt(1 - exp(-Db))
+    
+    Db = 1/4*((x1-x2)²/(a1+a2) + (y1-y2)²/(b1+b2))-ln2 \
+    1/2*ln((a1+a2)*(b1+b2)) - 1/4*ln(a1*a2*b1*b2)
+    '''
+
+    input  = get_piou_values(input.squeeze())
+    target = get_piou_values(target.squeeze())
+
+    x1, y1, a1, b1 = input[:,0],  input[:,1],  input[:,2],  input[:,3]
+    x2, y2, a2, b2 = target[:,0], target[:,1], target[:,2], target[:,3]
+
+    if freezed:
+        B1 = 1/4.*(torch.pow(x1-x2, 2.)/(a1+a2+EPS) + torch.pow(y1-y2, 2.)/(b1+b2+EPS))
+        B2 = 1/2.*torch.log((a1+a2)*(b1+b2)+EPS)
+        B3 = 1/4.*torch.log(a1*a2*b1*b2+EPS) 
+
+        B4 = torch.log( torch.ones(B3.shape, device=B3.device)*2)
+
+        Db = B1 + B2 - B3 - B4
+    else:
+        Db = torch.pow(x1-x2, 2.)/(2*a1+EPS) + torch.pow(y1-y2, 2.)/(2*b1+EPS)
+    
+    Db = Db.clamp(min=EPS, max=100.)
+    
+    return torch.sqrt(1 - torch.exp(-Db) + EPS)
+
+
+def piou_loss(input, target, helinger = True):
     """
 
     """
-    input  = tlbr2gaussian(input.squeeze())
-    target = tlbr2gaussian(target.squeeze())
+    input  = get_piou_values(input.squeeze())
+    target = get_piou_values(target.squeeze())
 
     b1_x1, b1_y1, b1_a1, b1_b1 = input[:,0],  input[:,1],  input[:,2],  input[:,3]
     b2_x2, b2_y2, b2_a2, b2_b2 = target[:,0], target[:,1], target[:,2], target[:,3]
@@ -545,3 +591,23 @@ def piou_loss(input, target, helinger = False):
         db = torch.sqrt(1 - torch.exp(-db))
     
     return db.sum() 
+
+
+def calc_piou(mode, input, target, freezed=False):
+    
+    l1 = helinger_dist(
+                input,
+                target,
+                freezed=freezed
+            )
+
+    if mode=='piou_l1':
+        return l1.sum()
+    
+    l2 = torch.pow(l1, 2.)
+    if mode=='piou_l2':
+        return l2.sum()
+    
+    l3 = - torch.log(1. - l2 + EPS)
+    if mode=='piou_l3':
+        return l3.sum()

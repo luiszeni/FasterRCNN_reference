@@ -221,10 +221,11 @@ class CocoDetection(torchvision.datasets.CocoDetection):
 
 
 def get_voc(root, image_set, transforms, year='2007'):
-    anno_file_template = "voc_{}_{}.json"
+    anno_file_template = "pascal_{}{}.json"
     PATHS = {
-        "train": ("JPEGImages", os.path.join("annotations", anno_file_template.format(year, "trainval"))),
-        "val": ("JPEGImages", os.path.join("annotations", anno_file_template.format(year, "test"))),
+        "train": ("JPEGImages", os.path.join("annotations", anno_file_template.format( "train", year))),
+        "val": ("JPEGImages", os.path.join("annotations", anno_file_template.format("val", year))),
+        "test": ("JPEGImages", os.path.join("annotations", anno_file_template.format("test", year))),
     }
 
     t = [ConvertCocoPolysToMask()]

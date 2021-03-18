@@ -369,35 +369,37 @@ class RegionProposalNetwork(torch.nn.Module):
                 beta=1 / 9,
                 size_average=False,
             ) 
-        elif loss_rpn_type == 'piou':
+        elif 'piou' in loss_rpn_type:
             boxes_per_image = [boxes_in_image.shape[0] for boxes_in_image in anchors]
 
             regression_targets = self.box_coder.decode(regression_targets, anchors)   #.clamp(min=0)
             pred_bbox_deltas   = self.box_coder.decode(pred_bbox_deltas,   anchors)     #.clamp(min=0)
 
-            # regression_targets = regression_targets.split(boxes_per_image, 0)
-            # pred_bbox_deltas   = pred_bbox_deltas.split(boxes_per_image, 0)
+            clamp_boxes = False
+            if clamp_boxes:
+                regression_targets = regression_targets.split(boxes_per_image, 0)
+                pred_bbox_deltas   = pred_bbox_deltas.split(boxes_per_image, 0)
 
 
-            # all_regression_targets = []
-            # all_pred_bbox_deltas = []
+                all_regression_targets = []
+                all_pred_bbox_deltas = []
 
-            # for regression_target, pred_bbox_delta, image_shape in zip(regression_targets, pred_bbox_deltas, original_image_sizes):
-            #     regression_target = box_ops.clip_boxes_to_image(regression_target, image_shape)
-            #     pred_bbox_delta = box_ops.clip_boxes_to_image(pred_bbox_delta, image_shape)
-
-
-            #     all_regression_targets.append(regression_target)
-            #     all_pred_bbox_deltas.append(pred_bbox_delta)
+                for regression_target, pred_bbox_delta, image_shape in zip(regression_targets, pred_bbox_deltas, original_image_sizes):
+                    regression_target = box_ops.clip_boxes_to_image(regression_target, image_shape)
+                    pred_bbox_delta = box_ops.clip_boxes_to_image(pred_bbox_delta, image_shape)
 
 
-            # regression_targets = torch.cat(all_regression_targets)
-            # pred_bbox_deltas = torch.cat(all_pred_bbox_deltas)
+                    all_regression_targets.append(regression_target)
+                    all_pred_bbox_deltas.append(pred_bbox_delta)
 
-            box_loss = det_utils.piou_loss(
+
+                regression_targets = torch.cat(all_regression_targets)
+                pred_bbox_deltas = torch.cat(all_pred_bbox_deltas)
+
+            box_loss = det_utils.calc_piou(
+                loss_rpn_type,
                 pred_bbox_deltas[sampled_pos_inds],
-                regression_targets[sampled_pos_inds],
-                helinger=True
+                regression_targets[sampled_pos_inds]
             ) 
         else:
             raise ValueError(loss_rpn_type, "is not a valid bbox regression loss function")

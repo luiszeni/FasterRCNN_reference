@@ -15,7 +15,7 @@ import torchvision.models.detection.mask_rcnn
 from util.coco_utils import get_coco_api_from_dataset
 from datasets.coco_eval import CocoEvaluator
 import util.utils as utils
-
+import numpy as np
 from pdb import set_trace as pause
 
 #
@@ -60,7 +60,6 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
 
         metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-
     return metric_logger
 
 
@@ -113,6 +112,29 @@ def evaluate(model, data_loader, device):
 
     # accumulate predictions from all images
     coco_evaluator.accumulate()
+    ap_default = _log_detection_eval_metrics(coco_evaluator)
     coco_evaluator.summarize()
     torch.set_num_threads(n_threads)
-    return coco_evaluator
+    return coco_evaluator, ap_default
+
+
+def _log_detection_eval_metrics(coco_eval):
+    def _get_thr_ind(coco_eval, thr):
+        ind = np.where((coco_eval.params.iouThrs > thr - 1e-5) &
+                       (coco_eval.params.iouThrs < thr + 1e-5))[0][0]
+        iou_thr = coco_eval.params.iouThrs[ind]
+        assert np.isclose(iou_thr, thr)
+        return ind
+
+    IoU_lo_thresh = 0.5
+    IoU_hi_thresh = 0.95
+    ind_lo = _get_thr_ind(coco_eval.coco_eval['bbox'], IoU_lo_thresh)
+    ind_hi = _get_thr_ind(coco_eval.coco_eval['bbox'], IoU_hi_thresh)
+    # precision has dims (iou, recall, cls, area range, max dets)
+    # area range index 0: all area ranges
+    # max dets index 2: 100 per image
+    precision = coco_eval.coco_eval['bbox'].eval['precision'][ind_lo:(ind_hi + 1), :, :, 0, 2]
+    ap_default = np.mean(precision[precision > -1])
+    print('~~~~ Mean and per-category AP @ IoU=[{:.2f},{:.2f}] ~~~~'.format(IoU_lo_thresh, IoU_hi_thresh))
+    print('{:.1f}'.format(100 * ap_default))
+    return ap_default
