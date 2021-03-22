@@ -130,6 +130,13 @@ class GeneralizedRCNNTransform(nn.Module):
         std = torch.as_tensor(self.image_std, dtype=dtype, device=device)
         return (image - mean[:, None, None]) / std[:, None, None]
 
+    def unnormalize(self, image):
+        dtype, device = image.dtype, image.device
+        mean = torch.as_tensor(self.image_mean, dtype=dtype, device=device)
+        std = torch.as_tensor(self.image_std, dtype=dtype, device=device)
+        return image * std[:, None, None] + mean[:, None, None]
+
+
     def torch_choice(self, k):
         # type: (List[int]) -> int
         """
@@ -159,6 +166,11 @@ class GeneralizedRCNNTransform(nn.Module):
         bbox = target["boxes"]
         bbox = resize_boxes(bbox, (h, w), image.shape[-2:])
         target["boxes"] = bbox
+
+
+        proposals = target["proposals"]
+        proposals = resize_boxes(proposals, (h, w), image.shape[-2:])
+        target["proposals"] = proposals
 
         if "keypoints" in target:
             keypoints = target["keypoints"]

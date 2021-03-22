@@ -9,14 +9,14 @@ Implements the Generalized R-CNN framework
 '''
 import torch
 import warnings
-
+import cv2
 from torch import nn
 from torch import Tensor
 from typing import Union
 from collections import OrderedDict
-
+import numpy as np
 from torch.jit.annotations import Tuple, List, Dict, Optional
-
+from pdb import set_trace as pause
 #
 
 class GeneralizedRCNN(nn.Module):
@@ -103,18 +103,110 @@ class GeneralizedRCNN(nn.Module):
         features = self.backbone(images.tensors)
         if isinstance(features, torch.Tensor):
             features = OrderedDict([('0', features)])
-        proposals, proposal_losses = self.rpn(images, features, targets)
+        # proposals, proposal_losses = self.rpn(images, features, targets)
+        proposals = [t['proposals'] for t in targets]
+        
+
+        DEDUP_BOXES = 1/8
+        for prop in proposals:
+            v = np.array([1e3, 1e6, 1e9, 1e12])
+            hashes = np.round(prop.cpu().numpy() * DEDUP_BOXES).dot(v)
+            
+            _, index, inv_index = np.unique(hashes, return_index=True, return_inverse=True)
+
+            sp = prop.shape
+            prop  = prop[index, :]
+            # print('removed ', sp[0] - prop.shape[0])
+
+
         detections, detector_losses = self.roi_heads(features, proposals, images.image_sizes, targets)
-        detections = self.transform.postprocess(detections, images.image_sizes, original_image_sizes)
+
+
+        display_input_data = False
+        if display_input_data: 
+            for i, img in enumerate(images.tensors):
+
+                img = self.transform.unnormalize(img)
+
+                img_cv = img.permute(1,2,0).cpu().numpy()
+                img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
+        
+                box_scores = detections[i]
+                proposal    = proposals[i]
+
+                score, index = box_scores[:,1:].max(dim=0)
+                # score, index = box_scores[:].max(dim=0)
+                
+                class_ids = torch.where(score>0.1)[0]
+                index = index[score>0.1]
+
+                detected = proposal[index]
+
+                for box in detected:
+                    box =  box.to(torch.int)
+                    p1 = tuple(box[:2].cpu().tolist())
+                    p2 = tuple(box[2:].cpu().tolist())
+
+                    cv2.rectangle(img_cv, p1, p2,  (0,0,255), 3)
+
+
+
+                img_cv = cv2.resize(img_cv, None, fx=0.5, fy=0.5)
+                cv2.imshow("image", img_cv)
+                
+                
+                if cv2.waitKey(0) == ord('q'):
+                    exit()
+
+        #         # #display annotations
+        #         # target = targets[i]
+        #         # print("image_id", target['image_id'])
+        #         # for box, label, keypoints, in zip(target['boxes'], target['labels'], target['keypoints']):
+
+        #         #     box =  box.to(torch.int)
+        #         #     p1 = tuple(box[:2].cpu().tolist())
+        #         #     p2 = tuple(box[2:].cpu().tolist())
+
+        #         #     cv2.rectangle(img_cv, p1, p2,  (0,0,255), 3)
+
+        #         #     keypoints = keypoints[:,:2].to(torch.int)
+        #         #     for i, pt in enumerate(keypoints):
+
+        #         #         color = (0,0,255)
+        #         #         if i in [0, 5, 6, 13]:
+        #         #             color = (0,255,0)
+        #         #         elif i in [1,2,3,4]:
+        #         #             color = (255,0,0)
+
+
+        #         #         font = cv2.FONT_HERSHEY_SIMPLEX
+        #         #         font_scale = 1
+        #         #         thickness = 1
+        #         #         det_color=(255,0,0)
+
+        #         #         img_cv = cv2.circle(img_cv,  tuple(pt.cpu().numpy().astype(np.int32).tolist()), radius=6, color=color, thickness=-1)
+        #         #         cv2.putText(img_cv, 'p_'+str(i), tuple(pt.cpu().numpy().astype(np.int32).tolist()), font, font_scale, (0,0,0), thickness, cv2.LINE_AA)
+                        
+                    
+                    
+        #         #     # text = '{:s} {:1.2f}'.format(classes[label],score)
+                    
+        #         #     # draw_bb_text(frame, text, p1)
+        
+
+
+
+
 
         losses = {}
         losses.update(detector_losses)
-        losses.update(proposal_losses)
+        # losses.update(proposal_losses)
+        return losses
 
-        if torch.jit.is_scripting():
-            if not self._has_warned:
-                warnings.warn("RCNN always returns a (Losses, Detections) tuple in scripting")
-                self._has_warned = True
-            return (losses, detections)
-        else:
-            return self.eager_outputs(losses, detections)
+        # if torch.jit.is_scripting():
+        #     if not self._has_warned:
+        #         warnings.warn("RCNN always returns a (Losses, Detections) tuple in scripting")
+        #         self._has_warned = True
+        #     return (losses, detections)
+        # else:
+        #     return self.eager_outputs(losses, detections)

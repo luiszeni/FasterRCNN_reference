@@ -36,7 +36,7 @@ import util.presets as presets
 import util.utils as utils
 import numpy as np
 from model.faster_rcnn import fasterrcnn_resnet50_fpn
-
+from pdb import set_trace as pause
 def get_dataset(name, image_set, transform, data_path):
     paths = {
         "voc": (data_path, get_voc, 21),
@@ -71,8 +71,8 @@ def main(args):
     # Data loading code
     print("Loading data")
 
-    dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
-    dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
+    dataset, num_classes = get_dataset(args.dataset, "trainval", get_transform(train=True), args.data_path)
+    dataset_test, _ = get_dataset(args.dataset, "test", get_transform(train=False), args.data_path)
 
     print("Creating data loaders")
     if args.distributed:
@@ -132,9 +132,17 @@ def main(args):
         evaluate(model, data_loader_test, device=device)
         return
 
+    model.roi_heads.total_iterations = args.epochs* len(data_loader)
+    model.roi_heads.warmup = False
+
+    # Freeze backbone
+    for param in model.backbone.parameters():
+        param.requires_grad = True
+
+
     print("Start training")
     start_time = time.time()
-    for epoch in range(args.start_epoch, args.epochs):
+    for epoch in range(0, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         train_one_epoch(model, optimizer, data_loader, device, epoch, args.print_freq)
@@ -148,9 +156,9 @@ def main(args):
                 'epoch': epoch},
                 os.path.join(args.output_dir, 'model_{}.pth'.format(epoch)))
 
-        # evaluate after every 10 epochs
-        if epoch % 10 == 0:
-            evaluate(model, data_loader_test, device=device)
+        # # evaluate after every 10 epochs
+        # if epoch % 10 == 0:
+        #     evaluate(model, data_loader_test, device=device)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -166,7 +174,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', default='coco', help='dataset')
     parser.add_argument('--model', default='maskrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
-    parser.add_argument('-b', '--batch-size', default=2, type=int,
+    parser.add_argument('-b', '--batch-size', default=4, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
     parser.add_argument('--epochs', default=26, type=int, metavar='N',
                         help='number of total epochs to run')

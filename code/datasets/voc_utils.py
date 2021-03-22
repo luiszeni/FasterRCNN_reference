@@ -10,7 +10,9 @@ from pycocotools import mask as coco_mask
 from pycocotools.coco import COCO
 
 import util.transforms as T
-
+import pickle
+import numpy as np
+from pdb import set_trace as pause
 
 class FilterAndRemapCocoCategories(object):
     def __init__(self, categories, remap=True):
@@ -79,16 +81,33 @@ class ConvertCocoPolysToMask(object):
             if num_keypoints:
                 keypoints = keypoints.view(num_keypoints, -1, 3)
 
+        proposals = target['proposals']
+
+        proposals = torch.as_tensor(proposals, dtype=torch.float32)
+        proposals[:, 0::2].clamp_(min=0, max=w)
+        proposals[:, 1::2].clamp_(min=0, max=h)
+
+        keep_p = (proposals[:, 3] > proposals[:, 1]) & (proposals[:, 2] > proposals[:, 0])
+        proposals = proposals[keep_p]
+
+
         keep = (boxes[:, 3] > boxes[:, 1]) & (boxes[:, 2] > boxes[:, 0])
         boxes = boxes[keep]
         classes = classes[keep]
         masks = masks[keep]
+
+        labels = torch.zeros(21)
+        labels[classes] = 1
+
+
         if keypoints is not None:
             keypoints = keypoints[keep]
 
         target = {}
         target["boxes"] = boxes
+        target["proposals"] = proposals
         target["labels"] = classes
+        target["labels_ws"] = labels
         target["masks"] = masks
         target["image_id"] = image_id
         if keypoints is not None:
@@ -102,6 +121,7 @@ class ConvertCocoPolysToMask(object):
 
         return image, target
 
+        
 
 def _coco_remove_images_without_annotations(dataset, cat_list=None):
     def _has_only_empty_bbox(anno):
@@ -205,26 +225,83 @@ def get_coco_api_from_dataset(dataset):
         return dataset.coco
     return convert_to_coco_api(dataset)
 
+def sort_proposals(proposals, id_field):
+	"""Sort proposals by the specified id field."""
+	order = np.argsort(proposals[id_field])
+	fields_to_sort = ['boxes', id_field, 'scores']
+	for k in fields_to_sort:
+		proposals[k] = [proposals[k][i] for i in order]
+
+def filter_small_boxes(boxes, min_size):
+    """Keep boxes with width and height both greater than min_size."""
+    w = boxes[:, 2] - boxes[:, 0] + 1
+    h = boxes[:, 3] - boxes[:, 1] + 1
+    keep = np.where((w > min_size) & (h > min_size))[0]
+    return keep
+
+def clip_boxes_to_image(boxes, height, width):
+    """Clip an array of boxes to an image with the given height and width."""
+    boxes[:, [0, 2]] = np.minimum(width - 1., np.maximum(0., boxes[:, [0, 2]]))
+    boxes[:, [1, 3]] = np.minimum(height - 1., np.maximum(0., boxes[:, [1, 3]]))
+    return boxes
+
+def unique_boxes(boxes, scale=1.0):
+    """Return indices of unique boxes."""
+    v = np.array([1, 1e3, 1e6, 1e9])
+    hashes = np.round(boxes * scale).dot(v)
+    _, index = np.unique(hashes, return_index=True)
+    return np.sort(index)
 
 class CocoDetection(torchvision.datasets.CocoDetection):
-    def __init__(self, img_folder, ann_file, transforms):
+    def __init__(self, img_folder, ann_file, proposals_file, transforms):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         self._transforms = transforms
 
+       
+        with open(proposals_file, 'rb') as f:
+            proposals = pickle.load(f)
+        
+       
+        sort_proposals(proposals, 'indexes')
+
+        self.proposals = {}
+        for i, boxes in enumerate(proposals['boxes']):
+            
+
+            index = proposals['indexes'][i]
+
+            annotation = self.coco.loadImgs(ids=index)[0]
+            # Remove duplicate boxes and very small boxes and then take top k
+            boxes = clip_boxes_to_image(boxes, annotation['height'], annotation['width'])
+            keep = unique_boxes(boxes)
+            boxes = boxes[keep, :]
+            MIN_PROPOSAL_SIZE = 2
+            keep = filter_small_boxes(boxes, MIN_PROPOSAL_SIZE)
+            boxes = boxes[keep, :]
+        
+            self.proposals[index] = boxes.astype(np.float)
+
+
     def __getitem__(self, idx):
         img, target = super(CocoDetection, self).__getitem__(idx)
+       
         image_id = self.ids[idx]
+        
         target = dict(image_id=image_id, annotations=target)
+
+        target['proposals'] = self.proposals[image_id]
         if self._transforms is not None:
             img, target = self._transforms(img, target)
+
+        
         return img, target
 
 
 def get_voc(root, image_set, transforms, year='2007'):
     anno_file_template = "voc_{}_{}.json"
     PATHS = {
-        "train": ("JPEGImages", os.path.join("annotations", anno_file_template.format(year, "trainval"))),
-        "val": ("JPEGImages", os.path.join("annotations", anno_file_template.format(year, "test"))),
+        "trainval": ("JPEGImages", os.path.join("annotations", anno_file_template.format(year, "trainval"))),
+        "test": ("JPEGImages", os.path.join("annotations", anno_file_template.format(year, "test"))),
     }
 
     t = [ConvertCocoPolysToMask()]
@@ -233,11 +310,16 @@ def get_voc(root, image_set, transforms, year='2007'):
         t.append(transforms)
     transforms = T.Compose(t)
 
+
+
     img_folder, ann_file = PATHS[image_set]
     img_folder = os.path.join(root, img_folder)
     ann_file = os.path.join(root, ann_file)
 
-    dataset = CocoDetection(img_folder, ann_file, transforms=transforms)
+    
+    proposals_file = 'data/selective_search_data/voc_2007_' + image_set + '.pkl'
+
+    dataset = CocoDetection(img_folder, ann_file, proposals_file, transforms=transforms)
 
     if image_set == "train":
         dataset = _coco_remove_images_without_annotations(dataset)

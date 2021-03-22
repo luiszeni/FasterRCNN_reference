@@ -32,9 +32,11 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
 
         lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)
 
-    for images, targets in metric_logger.log_every(data_loader, print_freq, header):
+    for it, (images, targets) in metric_logger.log_every(data_loader, print_freq, header):
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+        model.roi_heads.inner_iter = epoch * len(data_loader) + it
 
         loss_dict = model(images, targets)
 
@@ -95,7 +97,8 @@ def evaluate(model, data_loader, device):
 
         torch.cuda.synchronize()
         model_time = time.time()
-        outputs = model(images)
+        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        outputs = model(images, targets)
 
         outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
         model_time = time.time() - model_time

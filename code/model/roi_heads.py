@@ -18,6 +18,15 @@ import util._utils as det_utils
 from torch.jit.annotations import Optional, List, Dict, Tuple
 from pdb import set_trace as pause
 
+from layers.refinement.oicr            import OICR         as Refinement
+from layers.losses.oicr_losses         import OICRLosses   as Losses
+from layers.losses.mil_loss            import mil_loss
+from layers.refinement_agents          import RefinementAgents
+from layers.distillation               import Distillation
+from layers.mil                        import MIL
+
+from layers.adaptative_supervision_functions  import get_adaptative_lambda
+
 
 def fastrcnn_loss(class_logits, box_regression, labels, regression_targets):
     # type: (Tensor, Tensor, List[Tensor], List[Tensor]) -> Tuple[Tensor, Tensor]
@@ -540,13 +549,16 @@ class RoIHeads(nn.Module):
         self.nms_thresh = nms_thresh
         self.detections_per_img = detections_per_img
 
-        self.mask_roi_pool = mask_roi_pool
-        self.mask_head = mask_head
-        self.mask_predictor = mask_predictor
 
-        self.keypoint_roi_pool = keypoint_roi_pool
-        self.keypoint_head = keypoint_head
-        self.keypoint_predictor = keypoint_predictor
+        dim_out = self.box_head.representation_size
+
+        self.mil               = MIL(dim_out, 20)
+        self.refinement_agents = RefinementAgents(dim_out, 21)
+        self.distillation      = Distillation(dim_out, 21)
+
+        self.Refine_Losses     = [Losses() for i in range(3)]
+        self.distillation_loss = Losses()
+
 
     def has_mask(self):
         if self.mask_roi_pool is None:
@@ -585,7 +597,7 @@ class RoIHeads(nn.Module):
                 #  set to self.box_similarity when https://github.com/pytorch/pytorch/issues/27495 lands
                 match_quality_matrix = box_ops.box_iou(gt_boxes_in_image, proposals_in_image)
                 matched_idxs_in_image = self.proposal_matcher(match_quality_matrix)
-
+                
                 clamped_matched_idxs_in_image = matched_idxs_in_image.clamp(min=0)
 
                 labels_in_image = gt_labels_in_image[clamped_matched_idxs_in_image]
@@ -644,26 +656,28 @@ class RoIHeads(nn.Module):
         gt_boxes = [t["boxes"].to(dtype) for t in targets]
         gt_labels = [t["labels"] for t in targets]
 
-        # append ground-truth bboxes to propos
-        proposals = self.add_gt_proposals(proposals, gt_boxes)
+        # # append ground-truth bboxes to propos
+        # proposals = self.add_gt_proposals(proposals, gt_boxes)
 
         # get matching gt indices for each proposal
         matched_idxs, labels = self.assign_targets_to_proposals(proposals, gt_boxes, gt_labels)
+
         # sample a fixed proportion of positive-negative proposals
-        sampled_inds = self.subsample(labels)
+        # sampled_inds = self.subsample(labels)
         matched_gt_boxes = []
         num_images = len(proposals)
         for img_id in range(num_images):
-            img_sampled_inds = sampled_inds[img_id]
-            proposals[img_id] = proposals[img_id][img_sampled_inds]
-            labels[img_id] = labels[img_id][img_sampled_inds]
-            matched_idxs[img_id] = matched_idxs[img_id][img_sampled_inds]
+            # img_sampled_inds = sampled_inds[img_id]
+            # proposals[img_id] = proposals[img_id][img_sampled_inds]
+            # labels[img_id] = labels[img_id][img_sampled_inds]
+            # matched_idxs[img_id] = matched_idxs[img_id][img_sampled_inds]
 
             gt_boxes_in_image = gt_boxes[img_id]
             if gt_boxes_in_image.numel() == 0:
                 gt_boxes_in_image = torch.zeros((1, 4), dtype=dtype, device=device)
             matched_gt_boxes.append(gt_boxes_in_image[matched_idxs[img_id]])
 
+       
         regression_targets = self.box_coder.encode(matched_gt_boxes, proposals)
         return proposals, matched_idxs, labels, regression_targets
 
@@ -744,19 +758,115 @@ class RoIHeads(nn.Module):
                 # TODO: https://github.com/pytorch/pytorch/issues/26731
                 floating_point_types = (torch.float, torch.double, torch.half)
                 assert t["boxes"].dtype in floating_point_types, 'target boxes must of float type'
-                assert t["labels"].dtype == torch.int64, 'target labels must of int64 type'
-                if self.has_keypoint():
-                    assert t["keypoints"].dtype == torch.float32, 'target keypoints must of float type'
+                # assert t["labels"].dtype == torch.int64, 'target labels must of int64 type'
+                # if self.has_keypoint():
+                #     assert t["keypoints"].dtype == torch.float32, 'target keypoints must of float type'
 
-        if self.training:
-            proposals, matched_idxs, labels, regression_targets = self.select_training_samples(proposals, targets)
-        else:
-            labels = None
-            regression_targets = None
-            matched_idxs = None
+        # if self.training:
+        #     proposals, matched_idxs, labels, regression_targets = self.select_training_samples(proposals, targets)
+         
+        # else:
+        #     labels = None
+        #     regression_targets = None
+        #     matched_idxs = None
 
+        prop_lens =  [p.shape[0] for p in proposals]
+        
         box_features = self.box_roi_pool(features, proposals, image_shapes)
         box_features = self.box_head(box_features)
+        
+        
+        
+        box_features = box_features.split(prop_lens)
+        labels =  [t['labels_ws'] for t in targets]
+
+        losses = {}
+        detections = []
+        if self.training:
+            lambda_gt, lambda_ign  = get_adaptative_lambda(self.inner_iter, self.total_iterations)
+            # print(self.inner_iter, self.total_iterations, lambda_gt, lambda_ign)
+
+
+        for i, box_feat in enumerate(box_features):
+            label = labels[i]
+            proposal = proposals[i]
+            mil_score          = self.mil(box_feat)
+            refine_score       = self.refinement_agents(box_feat)
+            distillation_score = self.distillation(box_feat)
+
+            im_cls_score = mil_score.sum(dim=0, keepdim=True)
+
+
+            if self.training:
+                # image classification loss
+                loss_im_cls = mil_loss(im_cls_score, label[1:])
+                if 'loss_im_cls' not in losses:
+                    losses['loss_im_cls'] = []
+                
+                losses['loss_im_cls'].append(loss_im_cls)
+
+
+                if self.warmup:
+                    continue
+                
+
+                for i_refine, refine in enumerate(refine_score):
+                    if i_refine == 0:
+                        refinement_output = Refinement(proposal, mil_score, label[1:][None], refine, lambda_gt=lambda_gt, lambda_ign=lambda_ign)
+                    else:
+                        refinement_output = Refinement(proposal, refine_score[i_refine - 1],
+                                            label[1:][None], refine, lambda_gt=lambda_gt, lambda_ign=lambda_ign)
+
+                    refine_loss = self.Refine_Losses[i_refine](refine,
+                                                                refinement_output['labels'],
+                                                                refinement_output['cls_loss_weights'],
+                                                                refinement_output['gt_assignment'],
+                                                                refinement_output['im_labels_real'])
+
+                    if 'refine_loss%d' % i_refine not in losses:
+                        losses['refine_loss%d' % i_refine] = []
+                
+                    losses['refine_loss%d' % i_refine].append(refine_loss.clone())
+
+
+                distilation_sup = (refine_score[0] + refine_score[1]  + refine_score[2])/3
+
+
+                distillation_refinement = Refinement(proposal, distilation_sup, label[1:][None], distillation_score, lambda_gt=lambda_gt, lambda_ign=lambda_ign)
+
+                distillation_loss = self.distillation_loss(distillation_score,
+                                                distillation_refinement['labels'],
+                                                distillation_refinement['cls_loss_weights'],
+                                                distillation_refinement['gt_assignment'],
+                                                distillation_refinement['im_labels_real'])
+               
+                if 'distillation_loss' not in losses:
+                    losses['distillation_loss'] = []
+                
+                losses['distillation_loss'].append(distillation_loss.clone())
+
+            final_scores = refine_score[0].clone().detach()
+            for i in range(1, 3):
+                final_scores += refine_score[i].clone().detach()
+            
+            final_scores += distillation_score.clone().detach()
+            final_scores /= 3 + 1
+            detections.append(final_scores)
+            # detections.append(mil_score.clone().detach())
+
+        if self.training:
+            for key in losses:
+                losses[key] = torch.stack(losses[key]).mean ()
+
+
+       
+
+
+
+        return detections, losses
+          
+
+
         class_logits, box_regression = self.box_predictor(box_features)
 
         result: List[Dict[str, torch.Tensor]] = []
@@ -781,93 +891,6 @@ class RoIHeads(nn.Module):
                     }
                 )
 
-        if self.has_mask():
-            mask_proposals = [p["boxes"] for p in result]
-            if self.training:
-                assert matched_idxs is not None
-                # during training, only focus on positive boxes
-                num_images = len(proposals)
-                mask_proposals = []
-                pos_matched_idxs = []
-                for img_id in range(num_images):
-                    pos = torch.where(labels[img_id] > 0)[0]
-                    mask_proposals.append(proposals[img_id][pos])
-                    pos_matched_idxs.append(matched_idxs[img_id][pos])
-            else:
-                pos_matched_idxs = None
-
-            if self.mask_roi_pool is not None:
-                mask_features = self.mask_roi_pool(features, mask_proposals, image_shapes)
-                mask_features = self.mask_head(mask_features)
-                mask_logits = self.mask_predictor(mask_features)
-            else:
-                raise Exception("Expected mask_roi_pool to be not None")
-
-            loss_mask = {}
-            if self.training:
-                assert targets is not None
-                assert pos_matched_idxs is not None
-                assert mask_logits is not None
-
-                gt_masks = [t["masks"] for t in targets]
-                gt_labels = [t["labels"] for t in targets]
-                rcnn_loss_mask = maskrcnn_loss(
-                    mask_logits, mask_proposals,
-                    gt_masks, gt_labels, pos_matched_idxs)
-                loss_mask = {
-                    "loss_mask": rcnn_loss_mask
-                }
-            else:
-                labels = [r["labels"] for r in result]
-                masks_probs = maskrcnn_inference(mask_logits, labels)
-                for mask_prob, r in zip(masks_probs, result):
-                    r["masks"] = mask_prob
-
-            losses.update(loss_mask)
-
-        # keep none checks in if conditional so torchscript will conditionally
-        # compile each branch
-        if self.keypoint_roi_pool is not None and self.keypoint_head is not None \
-                and self.keypoint_predictor is not None:
-            keypoint_proposals = [p["boxes"] for p in result]
-            if self.training:
-                # during training, only focus on positive boxes
-                num_images = len(proposals)
-                keypoint_proposals = []
-                pos_matched_idxs = []
-                assert matched_idxs is not None
-                for img_id in range(num_images):
-                    pos = torch.where(labels[img_id] > 0)[0]
-                    keypoint_proposals.append(proposals[img_id][pos])
-                    pos_matched_idxs.append(matched_idxs[img_id][pos])
-            else:
-                pos_matched_idxs = None
-
-            keypoint_features = self.keypoint_roi_pool(features, keypoint_proposals, image_shapes)
-            keypoint_features = self.keypoint_head(keypoint_features)
-            keypoint_logits = self.keypoint_predictor(keypoint_features)
-
-            loss_keypoint = {}
-            if self.training:
-                assert targets is not None
-                assert pos_matched_idxs is not None
-
-                gt_keypoints = [t["keypoints"] for t in targets]
-                rcnn_loss_keypoint = keypointrcnn_loss(
-                    keypoint_logits, keypoint_proposals,
-                    gt_keypoints, pos_matched_idxs)
-                loss_keypoint = {
-                    "loss_keypoint": rcnn_loss_keypoint
-                }
-            else:
-                assert keypoint_logits is not None
-                assert keypoint_proposals is not None
-
-                keypoints_probs, kp_scores = keypointrcnn_inference(keypoint_logits, keypoint_proposals)
-                for keypoint_prob, kps, r in zip(keypoints_probs, kp_scores, result):
-                    r["keypoints"] = keypoint_prob
-                    r["keypoints_scores"] = kps
-
-            losses.update(loss_keypoint)
+       
 
         return result, losses

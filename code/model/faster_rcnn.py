@@ -190,26 +190,26 @@ class FasterRCNN(GeneralizedRCNN):
 
         out_channels = backbone.out_channels
 
-        if rpn_anchor_generator is None:
-            anchor_sizes = ((32,), (64,), (128,), (256,), (512,))
-            aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
-            rpn_anchor_generator = AnchorGenerator(
-                anchor_sizes, aspect_ratios
-            )
-        if rpn_head is None:
-            rpn_head = RPNHead(
-                out_channels, rpn_anchor_generator.num_anchors_per_location()[0]
-            )
+        # if rpn_anchor_generator is None:
+        #     anchor_sizes = ((32,), (64,), (128,), (256,), (512,))
+        #     aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+        #     rpn_anchor_generator = AnchorGenerator(
+        #         anchor_sizes, aspect_ratios
+        #     )
+        # if rpn_head is None:
+        #     rpn_head = RPNHead(
+        #         out_channels, rpn_anchor_generator.num_anchors_per_location()[0]
+        #     )
 
-        rpn_pre_nms_top_n = dict(training=rpn_pre_nms_top_n_train, testing=rpn_pre_nms_top_n_test)
-        rpn_post_nms_top_n = dict(training=rpn_post_nms_top_n_train, testing=rpn_post_nms_top_n_test)
+        # rpn_pre_nms_top_n = dict(training=rpn_pre_nms_top_n_train, testing=rpn_pre_nms_top_n_test)
+        # rpn_post_nms_top_n = dict(training=rpn_post_nms_top_n_train, testing=rpn_post_nms_top_n_test)
 
-        rpn = RegionProposalNetwork(
-            rpn_anchor_generator, rpn_head,
-            rpn_fg_iou_thresh, rpn_bg_iou_thresh,
-            rpn_batch_size_per_image, rpn_positive_fraction,
-            rpn_pre_nms_top_n, rpn_post_nms_top_n, rpn_nms_thresh,
-            score_thresh=rpn_score_thresh)
+        # rpn = RegionProposalNetwork(
+        #     rpn_anchor_generator, rpn_head,
+        #     rpn_fg_iou_thresh, rpn_bg_iou_thresh,
+        #     rpn_batch_size_per_image, rpn_positive_fraction,
+        #     rpn_pre_nms_top_n, rpn_post_nms_top_n, rpn_nms_thresh,
+        #     score_thresh=rpn_score_thresh)
 
         if box_roi_pool is None:
             box_roi_pool = MultiScaleRoIAlign(
@@ -219,20 +219,20 @@ class FasterRCNN(GeneralizedRCNN):
 
         if box_head is None:
             resolution = box_roi_pool.output_size[0]
-            representation_size = 1024
+            representation_size = 4096
             box_head = TwoMLPHead(
                 out_channels * resolution ** 2,
                 representation_size)
 
-        if box_predictor is None:
-            representation_size = 1024
-            box_predictor = FastRCNNPredictor(
-                representation_size,
-                num_classes)
+        # if box_predictor is None:
+        #     representation_size = 1024
+        #     box_predictor = FastRCNNPredictor(
+        #         representation_size,
+        #         num_classes)
 
         roi_heads = RoIHeads(
             # Box
-            box_roi_pool, box_head, box_predictor,
+            box_roi_pool, box_head, None,
             box_fg_iou_thresh, box_bg_iou_thresh,
             box_batch_size_per_image, box_positive_fraction,
             bbox_reg_weights,
@@ -244,7 +244,7 @@ class FasterRCNN(GeneralizedRCNN):
             image_std = [0.229, 0.224, 0.225]
         transform = GeneralizedRCNNTransform(min_size, max_size, image_mean, image_std)
 
-        super(FasterRCNN, self).__init__(backbone, rpn, roi_heads, transform)
+        super(FasterRCNN, self).__init__(backbone, None, roi_heads, transform)
 
 
 class TwoMLPHead(nn.Module):
@@ -259,8 +259,11 @@ class TwoMLPHead(nn.Module):
     def __init__(self, in_channels, representation_size):
         super(TwoMLPHead, self).__init__()
 
+        self.representation_size = representation_size
         self.fc6 = nn.Linear(in_channels, representation_size)
         self.fc7 = nn.Linear(representation_size, representation_size)
+
+    
 
     def forward(self, x):
         x = x.flatten(start_dim=1)

@@ -35,6 +35,12 @@ class RandomHorizontalFlip(object):
             bbox = target["boxes"]
             bbox[:, [0, 2]] = width - bbox[:, [2, 0]]
             target["boxes"] = bbox
+
+            proposals = target["proposals"]
+            proposals[:, [0, 2]] = width - proposals[:, [2, 0]]
+            target["proposals"] = proposals
+
+
             if "masks" in target:
                 target["masks"] = target["masks"].flip(-1)
             if "keypoints" in target:
