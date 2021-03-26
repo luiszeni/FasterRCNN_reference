@@ -18,6 +18,7 @@ import util._utils as det_utils
 from torch.jit.annotations import Optional, List, Dict, Tuple
 from pdb import set_trace as pause
 
+from layers.refinement.sup_boxes            import SUP_BOX
 from layers.refinement.oicr            import OICR         as Refinement
 from layers.losses.oicr_losses         import OICRLosses   as Losses
 from layers.losses.mil_loss            import mil_loss
@@ -779,7 +780,7 @@ class RoIHeads(nn.Module):
         
         box_features = box_features.split(prop_lens)
         labels =  [t['labels_ws'] for t in targets]
-
+        sup_boxes = []
         losses = {}
         detections = []
         if self.training:
@@ -797,6 +798,8 @@ class RoIHeads(nn.Module):
             im_cls_score = mil_score.sum(dim=0, keepdim=True)
 
 
+
+
             if self.training:
                 # image classification loss
                 loss_im_cls = mil_loss(im_cls_score, label[1:])
@@ -805,7 +808,21 @@ class RoIHeads(nn.Module):
                 
                 losses['loss_im_cls'].append(loss_im_cls)
 
+                # b_mil  = SUP_BOX(proposal, mil_score, label[1:][None])
 
+                # b_ref0 = SUP_BOX(proposal, refine_score[0], label[1:][None])
+                # b_ref1 = SUP_BOX(proposal, refine_score[1], label[1:][None])
+                # b_ref2 = SUP_BOX(proposal, refine_score[2], label[1:][None])
+                b_dist = SUP_BOX(proposal, distillation_score, label[1:][None])
+
+                # b_mil['boxes'] =  torch.cat((b_mil['boxes'],  b_ref0['boxes'], b_ref1['boxes'], b_ref2['boxes'],b_dist['boxes'] ))
+                
+                # b_mil['gt_scores'] =  torch.cat((b_mil['gt_scores'],  b_ref0['gt_scores'], b_ref1['gt_scores'], b_ref2['gt_scores'],b_dist['gt_scores'] ))
+
+                sup_boxes.append(b_dist)
+
+
+                
                 if self.warmup:
                     continue
                 
@@ -863,7 +880,7 @@ class RoIHeads(nn.Module):
 
 
 
-        return detections, losses
+        return detections, losses, sup_boxes
           
 
 

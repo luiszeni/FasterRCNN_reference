@@ -17,6 +17,8 @@ from collections import OrderedDict
 import numpy as np
 from torch.jit.annotations import Tuple, List, Dict, Optional
 from pdb import set_trace as pause
+from torchvision.ops.boxes import box_iou
+from torchvision.ops import nms
 #
 
 class GeneralizedRCNN(nn.Module):
@@ -103,26 +105,30 @@ class GeneralizedRCNN(nn.Module):
         features = self.backbone(images.tensors)
         if isinstance(features, torch.Tensor):
             features = OrderedDict([('0', features)])
-        # proposals, proposal_losses = self.rpn(images, features, targets)
-        proposals = [t['proposals'] for t in targets]
+        
+        
+        proposals, loss_artifactis = self.rpn(images, features)
         
 
-        DEDUP_BOXES = 1/8
-        for prop in proposals:
-            v = np.array([1e3, 1e6, 1e9, 1e12])
-            hashes = np.round(prop.cpu().numpy() * DEDUP_BOXES).dot(v)
+
+        
+
+        # DEDUP_BOXES = 1/8
+        # for prop in proposals:
+        #     v = np.array([1e3, 1e6, 1e9, 1e12])
+        #     hashes = np.round(prop.cpu().numpy() * DEDUP_BOXES).dot(v)
             
-            _, index, inv_index = np.unique(hashes, return_index=True, return_inverse=True)
+        #     _, index, inv_index = np.unique(hashes, return_index=True, return_inverse=True)
 
-            sp = prop.shape
-            prop  = prop[index, :]
-            # print('removed ', sp[0] - prop.shape[0])
+        #     sp = prop.shape
+        #     prop  = prop[index, :]
+        #     # print('removed ', sp[0] - prop.shape[0])
+
+        detections, detector_losses, sup_boxes = self.roi_heads(features, proposals, images.image_sizes, targets)
 
 
-        detections, detector_losses = self.roi_heads(features, proposals, images.image_sizes, targets)
-
-
-        display_input_data = False
+        display_input_data = True
+        th = 0.1
         if display_input_data: 
             for i, img in enumerate(images.tensors):
 
@@ -130,71 +136,64 @@ class GeneralizedRCNN(nn.Module):
 
                 img_cv = img.permute(1,2,0).cpu().numpy()
                 img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
-        
+
+                img_prop = img_cv.copy()*0
+
+                proposal = proposals[0]
+
+                for prop in proposal:
+
+                    prop = prop.int()
+                    img_prop[prop[1]:prop[3], prop[0]:prop[2]] += 1 
+
+                img_prop /= img_prop.max()
+
                 box_scores = detections[i]
                 proposal    = proposals[i]
 
-                score, index = box_scores[:,1:].max(dim=0)
-                # score, index = box_scores[:].max(dim=0)
-                
-                class_ids = torch.where(score>0.1)[0]
-                index = index[score>0.1]
 
-                detected = proposal[index]
+                class_labels = [ 'aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair', 'cow', 'diningtable', 'dog', 'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor']
 
-                for box in detected:
-                    box =  box.to(torch.int)
-                    p1 = tuple(box[:2].cpu().tolist())
-                    p2 = tuple(box[2:].cpu().tolist())
+                for i, b_scores in enumerate(box_scores[:,1:].transpose(0,1)):
+                    
+                    
+                    keep = nms(proposal, b_scores, 0.3)
 
-                    cv2.rectangle(img_cv, p1, p2,  (0,0,255), 3)
+                    k_scores = b_scores[keep]
+                    k_boxes  = proposal[keep]
 
+                    for j, (box, score) in enumerate(zip(k_boxes, k_scores)):
+                        if score < th:
+                            continue
 
+                        label = class_labels[i]
 
-                img_cv = cv2.resize(img_cv, None, fx=0.5, fy=0.5)
+                        p1 = tuple(box[:2].int().cpu().tolist())
+                        p2 = tuple(box[2:].int().cpu().tolist())
+
+                        cv2.rectangle(img_cv, p1, p2,  (0,0,255), 3)
+                                            
+                        text = '{:s} {:2.2f}'.format(label, score)
+                        font = cv2.FONT_HERSHEY_SIMPLEX 
+                        fontScale = 0.7
+                        color = (0, 0, 255) 
+                        thickness = 2
+                        
+                        image = cv2.putText(img_cv, text, (p1[0], p1[1]+10), font, fontScale, (255,255,255), 5, cv2.LINE_AA) 
+                        image = cv2.putText(img_cv, text, (p1[0], p1[1]+10), font, fontScale, color, thickness, cv2.LINE_AA) 
+
+                # img_cv = cv2.resize(img_cv, None, fx=0.5, fy=0.5)
                 cv2.imshow("image", img_cv)
+                cv2.imshow("img_prop", img_prop)
                 
                 
                 if cv2.waitKey(0) == ord('q'):
                     exit()
 
-        #         # #display annotations
-        #         # target = targets[i]
-        #         # print("image_id", target['image_id'])
-        #         # for box, label, keypoints, in zip(target['boxes'], target['labels'], target['keypoints']):
-
-        #         #     box =  box.to(torch.int)
-        #         #     p1 = tuple(box[:2].cpu().tolist())
-        #         #     p2 = tuple(box[2:].cpu().tolist())
-
-        #         #     cv2.rectangle(img_cv, p1, p2,  (0,0,255), 3)
-
-        #         #     keypoints = keypoints[:,:2].to(torch.int)
-        #         #     for i, pt in enumerate(keypoints):
-
-        #         #         color = (0,0,255)
-        #         #         if i in [0, 5, 6, 13]:
-        #         #             color = (0,255,0)
-        #         #         elif i in [1,2,3,4]:
-        #         #             color = (255,0,0)
-
-
-        #         #         font = cv2.FONT_HERSHEY_SIMPLEX
-        #         #         font_scale = 1
-        #         #         thickness = 1
-        #         #         det_color=(255,0,0)
-
-        #         #         img_cv = cv2.circle(img_cv,  tuple(pt.cpu().numpy().astype(np.int32).tolist()), radius=6, color=color, thickness=-1)
-        #         #         cv2.putText(img_cv, 'p_'+str(i), tuple(pt.cpu().numpy().astype(np.int32).tolist()), font, font_scale, (0,0,0), thickness, cv2.LINE_AA)
-                        
-                    
-                    
-        #         #     # text = '{:s} {:1.2f}'.format(classes[label],score)
-                    
-        #         #     # draw_bb_text(frame, text, p1)
         
-
-
+        rpn_losses = self.rpn.calculate_loss(sup_boxes, loss_artifactis)
+        
+        detector_losses = {**detector_losses, **rpn_losses}
 
 
 
@@ -203,10 +202,3 @@ class GeneralizedRCNN(nn.Module):
         # losses.update(proposal_losses)
         return losses
 
-        # if torch.jit.is_scripting():
-        #     if not self._has_warned:
-        #         warnings.warn("RCNN always returns a (Losses, Detections) tuple in scripting")
-        #         self._has_warned = True
-        #     return (losses, detections)
-        # else:
-        #     return self.eager_outputs(losses, detections)

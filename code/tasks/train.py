@@ -135,9 +135,9 @@ def main(args):
     model.roi_heads.total_iterations = args.epochs* len(data_loader)
     model.roi_heads.warmup = False
 
-    # Freeze backbone
-    for param in model.backbone.parameters():
-        param.requires_grad = True
+    # # Freeze backbone
+    # for param in model.backbone.parameters():
+    #     param.requires_grad = True
 
 
     print("Start training")
@@ -180,7 +180,7 @@ if __name__ == "__main__":
                         help='number of total epochs to run')
     parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                         help='number of data loading workers (default: 4)')
-    parser.add_argument('--lr', default=0.02, type=float,
+    parser.add_argument('--lr', default=0.001, type=float,
                         help='initial learning rate, 0.02 is the default value for training '
                         'on 8 gpus and 2 images_per_gpu')
     parser.add_argument('--momentum', default=0.9, type=float, metavar='M',

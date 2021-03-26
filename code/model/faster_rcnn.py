@@ -10,7 +10,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from torchvision.ops import misc as misc_nn_ops
-from torchvision.ops import MultiScaleRoIAlign
+from util.multi_scale_roi_pool import MultiScaleRoIAlign
 
 from util._utils import overwrite_eps
 from torch.hub import load_state_dict_from_url
@@ -190,26 +190,26 @@ class FasterRCNN(GeneralizedRCNN):
 
         out_channels = backbone.out_channels
 
-        # if rpn_anchor_generator is None:
-        #     anchor_sizes = ((32,), (64,), (128,), (256,), (512,))
-        #     aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
-        #     rpn_anchor_generator = AnchorGenerator(
-        #         anchor_sizes, aspect_ratios
-        #     )
-        # if rpn_head is None:
-        #     rpn_head = RPNHead(
-        #         out_channels, rpn_anchor_generator.num_anchors_per_location()[0]
-        #     )
+        if rpn_anchor_generator is None:
+            anchor_sizes = ((32,), (64,), (128,), (256,), (512,))
+            aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+            rpn_anchor_generator = AnchorGenerator(
+                anchor_sizes, aspect_ratios
+            )
+        if rpn_head is None:
+            rpn_head = RPNHead(
+                out_channels, rpn_anchor_generator.num_anchors_per_location()[0]
+            )
 
-        # rpn_pre_nms_top_n = dict(training=rpn_pre_nms_top_n_train, testing=rpn_pre_nms_top_n_test)
-        # rpn_post_nms_top_n = dict(training=rpn_post_nms_top_n_train, testing=rpn_post_nms_top_n_test)
+        rpn_pre_nms_top_n = dict(training=rpn_pre_nms_top_n_train, testing=rpn_pre_nms_top_n_test)
+        rpn_post_nms_top_n = dict(training=rpn_post_nms_top_n_train, testing=rpn_post_nms_top_n_test)
 
-        # rpn = RegionProposalNetwork(
-        #     rpn_anchor_generator, rpn_head,
-        #     rpn_fg_iou_thresh, rpn_bg_iou_thresh,
-        #     rpn_batch_size_per_image, rpn_positive_fraction,
-        #     rpn_pre_nms_top_n, rpn_post_nms_top_n, rpn_nms_thresh,
-        #     score_thresh=rpn_score_thresh)
+        rpn = RegionProposalNetwork(
+            rpn_anchor_generator, rpn_head,
+            rpn_fg_iou_thresh, rpn_bg_iou_thresh,
+            rpn_batch_size_per_image, rpn_positive_fraction,
+            rpn_pre_nms_top_n, rpn_post_nms_top_n, rpn_nms_thresh,
+            score_thresh=rpn_score_thresh)
 
         if box_roi_pool is None:
             box_roi_pool = MultiScaleRoIAlign(
@@ -244,7 +244,7 @@ class FasterRCNN(GeneralizedRCNN):
             image_std = [0.229, 0.224, 0.225]
         transform = GeneralizedRCNNTransform(min_size, max_size, image_mean, image_std)
 
-        super(FasterRCNN, self).__init__(backbone, None, roi_heads, transform)
+        super(FasterRCNN, self).__init__(backbone, rpn, roi_heads, transform)
 
 
 class TwoMLPHead(nn.Module):
@@ -370,8 +370,10 @@ def fasterrcnn_resnet50_fpn(pretrained=False, progress=True,
         trainable_backbone_layers (int): number of trainable (not frozen) resnet layers starting from final block.
             Valid values are between 0 and 5, with 5 meaning all backbone layers are trainable.
     """
-    trainable_backbone_layers = _validate_trainable_layers(
-        pretrained or pretrained_backbone, trainable_backbone_layers, 5, 3)
+    # trainable_backbone_layers = _validate_trainable_layers(
+        # pretrained or pretrained_backbone, trainable_backbone_layers, 5, 3)
+
+    trainable_backbone_layers = 4
 
     if pretrained:
         # no need to download the backbone if pretrained is set
